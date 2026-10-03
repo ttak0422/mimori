@@ -37,7 +37,7 @@ func execute(args []string) error {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mimori {daemon|ingest|hook|query} [flags]")
+		return errors.New("usage: mimori {ensure|daemon|ingest|hook|query} [flags]")
 	}
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -52,6 +52,8 @@ func run(args []string) error {
 	provider := f.String("provider", "", "provider filter or hook provider")
 	session := f.String("session", "", "session detail ID")
 	rev := f.String("revision", "", "previous revision (same query only)")
+	timeout := f.Duration("timeout", 5*time.Second, "ensure readiness deadline (maximum 1 minute)")
+	readyFD := f.Int("ready-fd", 0, "internal daemon startup notification descriptor")
 	generation := f.Uint64("generation", 1, "authoritative process incarnation number for hook")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
@@ -59,11 +61,53 @@ func run(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected arguments")
 	}
+	if *readyFD != 0 && (args[0] != "daemon" || *readyFD != 4) {
+		return errors.New("invalid internal readiness descriptor")
+	}
 	switch args[0] {
+	case "ensure":
+		if *timeout <= 0 || *timeout > time.Minute {
+			return errors.New("ensure timeout must be positive and at most 1 minute")
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		result := make(chan error, 1)
+		go func() { result <- mimori.Ensure(ctx, *dir, executable) }()
+		select {
+		case err := <-result:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("readiness deadline: %w", ctx.Err())
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Version int  `json:"version"`
+			Ready   bool `json:"ready"`
+		}{1, true})
 	case "daemon":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return mimori.Serve(ctx, *dir, func(s string) { fmt.Fprintln(os.Stderr, "mimori:", s) })
+		var notify *os.File
+		if *readyFD != 0 {
+			notify = os.NewFile(uintptr(*readyFD), "readiness")
+			defer notify.Close()
+		}
+		err := mimori.ServeReady(ctx, *dir, func(s string) { fmt.Fprintln(os.Stderr, "mimori:", s) }, func() {
+			if notify != nil {
+				_, _ = notify.WriteString("ready\n")
+				_ = notify.Close()
+				notify = nil
+			}
+		})
+		if notify != nil && err != nil {
+			_, _ = fmt.Fprintf(notify, "%.4096s", err.Error())
+		}
+		return err
 	case "ingest", "hook":
 		// Bound waiting for a producer that never closes stdin. Filesystem stalls still
 		// require an outer provider hook timeout; no daemon/network access is needed.

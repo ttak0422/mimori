@@ -71,3 +71,29 @@ exposed contention at the earlier 250 ms budget.
 
 The existing komado display problem is not marked fixed: this delivers the
 independent backend PoC, with client adoption and live-provider fidelity still open.
+
+## On-demand lifecycle validation (2026-10-03 UTC)
+
+The macOS lifecycle suite exercises eight simultaneous ensure processes, reuse
+without epoch change, SIGKILL/stale-socket restart, loss of the initiating process
+group before readiness, and timeout without killing the child. It also verifies
+read-only query behavior, live incompatible endpoint preservation (including the
+foreground daemon path), private-directory checks, regular-file preservation,
+and startup storage-error delivery. Test daemon PIDs originate from the isolated
+test helper; fixtures and cleanup stay under disposable `/tmp` directories.
+
+`GOCACHE=/tmp/mimori-go-cache go test -race ./...`, `go vet ./...`, and native
+`nix flake check --no-update-lock-file --no-write-lock-file` passed. Host sandbox
+socket binding was denied, so socket/process tests used the normal narrowly
+approved external execution. Linux runtime behavior has not been executed here.
+
+The 52-session smoke fixture passed crash recovery and durable offline ingest.
+On this run, 30 CLI query samples measured median 8.75 ms / p95 10.03 ms; 30
+healthy `ensure` reuse samples measured median 8.67 ms / p95 9.61 ms. The 200 raw
+socket samples measured median 0.055 ms / p95 0.093 ms. Unchanged responses were
+97 bytes and the one-root snapshot was 472 bytes. These are local warm-process
+measurements, not latency guarantees. The 5-second readiness default allows
+substantial cold startup margin and remains configurable up to one minute;
+large retained stores can still exceed it and return a bounded error while the
+independent daemon continues startup. Detached runtime diagnostics are discarded;
+foreground `daemon` remains available for diagnosis.

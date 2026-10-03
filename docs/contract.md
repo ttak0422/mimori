@@ -113,3 +113,27 @@ or be newly created; mimori does not silently repair broad permissions. Symlink
 spool entries and lock files are not followed. Protect parent directories and use
 a local filesystem. NFS, Windows and hostile processes with the same UID are not
 supported security boundaries. DB schema version other than v1 is refused.
+
+
+## On-demand lifecycle
+
+`mimori ensure [--state-dir /absolute/private/path] [--timeout 5s]` explicitly
+ensures readiness. Success is exit 0 and `{"version":1,"ready":true}`. Errors are
+exit 1 with stderr diagnostics. The timeout must be positive and at most one minute;
+it bounds startup waiting, lock contention, and readiness. A timed-out caller must
+not conclude the daemon was killed: startup can still complete independently.
+
+The daemon is a new process session, with cwd `/`, stdin/stdout/stderr detached to
+`/dev/null`, and no service-manager dependency. Releasing clients never stops it.
+Repeated/concurrent calls preserve an existing ready daemon and revision epoch.
+An inherited startup lock closes the caller-death race; the existing daemon lock
+still enforces a single writer. Locks release on process exit. Stale Unix sockets
+are removed only under the daemon lock after confirming no listening endpoint.
+Live, incompatible, unresponsive, or inaccessible endpoints fail without replacement.
+Regular files/symlinks at the socket path are never removed. No database deletion,
+hook installation, permission grants, or agent process control occurs.
+
+Readiness uses a v1 query with `"health":true`; its complete response contains only
+version and revision and does not enumerate sessions. This is transport readiness,
+not agent liveness, and clients must never cache it as an empty root snapshot.
+Normal query behavior and durable offline ingest are unchanged.

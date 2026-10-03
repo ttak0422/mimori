@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
 type Query struct {
 	Version  int    `json:"version"`
+	Health   bool   `json:"health,omitempty"`
 	Revision string `json:"revision,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Session  string `json:"session_id,omitempty"`
@@ -114,6 +116,11 @@ func writeResponse(w io.Writer, r Response) error {
 	return err
 }
 func Serve(ctx context.Context, dir string, diagnose func(string)) error {
+	return ServeReady(ctx, dir, diagnose, func() {})
+}
+
+// ServeReady notifies only after storage and the query endpoint are ready.
+func ServeReady(ctx context.Context, dir string, diagnose func(string), ready func()) error {
 	if err := EnsureDir(dir); err != nil {
 		return err
 	}
@@ -136,6 +143,16 @@ func Serve(ctx context.Context, dir string, diagnose func(string)) error {
 		if st.Mode()&os.ModeSocket == 0 {
 			return errors.New("query.sock exists and is not a socket")
 		}
+		// Refuse to unlink any live endpoint, including a foreign/incompatible
+		// service that does not participate in our advisory lock.
+		c, dialErr := net.DialTimeout("unix", path, time.Second)
+		if dialErr == nil {
+			c.Close()
+			return errors.New("query.sock has a live listener")
+		}
+		if !errors.Is(dialErr, syscall.ECONNREFUSED) && !errors.Is(dialErr, syscall.ENOENT) {
+			return fmt.Errorf("check existing socket: %w", dialErr)
+		}
 		if err = os.Remove(path); err != nil {
 			return err
 		}
@@ -151,6 +168,7 @@ func Serve(ctx context.Context, dir string, diagnose func(string)) error {
 	if err = os.Chmod(path, 0600); err != nil {
 		return err
 	}
+	ready()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan struct{})
@@ -202,7 +220,12 @@ func Serve(ctx context.Context, dir string, diagnose func(string)) error {
 				return
 			}
 			mu.RLock()
-			r := snap.Query(q)
+			var r Response
+			if q.Health && q.Version == 1 {
+				r = Response{Version: 1, Revision: scopedRevision(snap.Revision, q), Complete: true}
+			} else {
+				r = snap.Query(q)
+			}
 			mu.RUnlock()
 			writeResponse(c, r)
 		}()

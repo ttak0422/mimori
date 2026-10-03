@@ -43,7 +43,16 @@ In terminal 2:
 
 Commands default to `$XDG_STATE_HOME/mimori` or `~/.local/state/mimori`.
 Every command accepts `--state-dir /absolute/private/path`. Keep this path short:
-Unix socket path limits apply. The daemon stays in the foreground; Ctrl-C stops it.
+Unix socket path limits apply. `daemon` stays in the foreground; Ctrl-C stops it.
+For editors or other on-demand clients, run `mimori ensure` before querying. It
+starts one independent daemon or reuses the ready daemon, with a 5-second readiness
+deadline (`--timeout 10s` overrides it, at most 1 minute). Success prints
+`{"version":1,"ready":true}`; failure exits nonzero with a diagnostic on stderr.
+Concurrent callers share the same daemon per state directory. The daemon survives
+caller cancellation and editor/terminal exit. It has no idle shutdown and installs
+no login service. A query never starts it. For foreground diagnostics, stop your
+known daemon and run `mimori daemon --state-dir ...` yourself; detached runtime
+diagnostics go to `/dev/null`, while startup errors are reported to `ensure`.
 Ingest also works while it is stopped. A query failure exits nonzero and must be
 shown as stale/unavailable by clients, not interpreted as a live status.
 

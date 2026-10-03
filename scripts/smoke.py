@@ -46,8 +46,15 @@ with tempfile.TemporaryDirectory(prefix="mm-", dir="/tmp") as state:
         cli=[]
         for _ in range(30):
             before=time.perf_counter();subprocess.run([binary,"query","--state-dir",state,"--revision",rev],check=True,stdout=subprocess.DEVNULL);cli.append((time.perf_counter()-before)*1000)
+        ensures=[]
+        for _ in range(30):
+            before=time.perf_counter()
+            ready=json.loads(subprocess.check_output([binary,"ensure","--state-dir",state]))
+            ensures.append((time.perf_counter()-before)*1000)
+            assert ready==dict(version=1,ready=True)
+        assert query()["revision"]==rev
         p.kill();_,status,cpu=os.wait4(p.pid,0);p.returncode=os.waitstatus_to_exitcode(status);p=start();after=query(rev)
         assert not after.get("unchanged") and after["roots"][0]["unresolved_requests"]==1
-        print(json.dumps(dict(sessions=52,socket_samples=len(times),socket_median_ms=statistics.median(times),socket_p95_ms=sorted(times)[189],cli_samples=len(cli),cli_median_ms=statistics.median(cli),unchanged_bytes=len(json.dumps(u,separators=(",",":")))+1,snapshot_bytes=len(json.dumps(r,separators=(",",":")))+1,daemon_cpu_seconds=cpu.ru_utime+cpu.ru_stime,crash_recovery=True),indent=2))
+        print(json.dumps(dict(sessions=52,socket_samples=len(times),socket_median_ms=statistics.median(times),socket_p95_ms=sorted(times)[189],cli_samples=len(cli),cli_median_ms=statistics.median(cli),cli_p95_ms=sorted(cli)[28],ensure_reuse_median_ms=statistics.median(ensures),ensure_reuse_p95_ms=sorted(ensures)[28],unchanged_bytes=len(json.dumps(u,separators=(",",":")))+1,snapshot_bytes=len(json.dumps(r,separators=(",",":")))+1,daemon_cpu_seconds=cpu.ru_utime+cpu.ru_stime,crash_recovery=True),indent=2))
     finally:
         p.terminate();p.wait(timeout=5)
