@@ -1,0 +1,1 @@
+{"version":1,"event_id":"demo-child-1","provider":"demo","session_id":"child","generation":1,"seq":1,"kind":"request_open","request_id":"approval-1","relation":"child","parent_id":"root","parent_generation":1,"observed_at":"2026-10-03T16:00:01Z"}
