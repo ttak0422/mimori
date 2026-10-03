@@ -104,7 +104,20 @@ func Enqueue(dir string, e Event) error {
 	if len(entries) >= MaxSpool {
 		return errors.New("spool full (4096 files); start daemon or inspect quarantine")
 	}
-	f, err := os.CreateTemp(spool, ".pending-")
+	return publishSpool(spool, b, func(dir, pattern string) (durableFile, error) { return os.CreateTemp(dir, pattern) })
+}
+
+type durableFile interface {
+	Name() string
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+// The file factory permits deterministic disk-full fault tests without filling
+// the user's disk; production always uses a real exclusive temporary file.
+func publishSpool(spool string, b []byte, create func(string, string) (durableFile, error)) error {
+	f, err := create(spool, ".pending-")
 	if err != nil {
 		return err
 	}
@@ -121,11 +134,12 @@ func Enqueue(dir string, e Event) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, filepath.Join(spool, NewID()+".json")); err != nil {
+	if err = os.Rename(tmp, filepath.Join(spool, time.Now().UTC().Format("20060102T150405.000000000")+"-"+NewID()+".json")); err != nil {
 		return err
 	}
 	return syncDir(spool)
 }
+
 func readBounded(path string) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {

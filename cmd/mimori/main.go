@@ -17,9 +17,22 @@ import (
 
 func main() {
 	syscall.Umask(0077)
-	if err := run(os.Args[1:]); err != nil {
+	if err := execute(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "mimori:", err)
 		os.Exit(1)
+	}
+}
+func execute(args []string) error {
+	if len(args) == 0 || (args[0] != "ingest" && args[0] != "hook") {
+		return run(args)
+	}
+	result := make(chan error, 1)
+	go func() { result <- run(args) }()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(2 * time.Second):
+		return errors.New("ingest deadline exceeded; delivery may have completed, retry normalized events with the same event_id")
 	}
 }
 func run(args []string) error {

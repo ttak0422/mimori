@@ -1,7 +1,10 @@
 package mimori
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
@@ -145,9 +148,10 @@ func BenchmarkSnapshotUnchanged(b *testing.B) {
 		es = append(es, e)
 	}
 	s := Snapshot{"epoch:1000", Reduce(es)}
+	rev := s.Query(Query{Version: 1}).Revision
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Query(Query{Version: 1, Revision: "epoch:1000"})
+		s.Query(Query{Version: 1, Revision: rev})
 	}
 }
 
@@ -169,5 +173,36 @@ func TestResolutionBeforeRequest(t *testing.T) {
 	b.Request = "r"
 	if Reduce([]Event{a, b})[0].Unresolved != 0 {
 		t.Fatal("late open recreated resolved request")
+	}
+}
+
+func TestSequencedPermutationsProduceSameSnapshot(t *testing.T) {
+	root := event("r", "r", "idle", 1)
+	root.Relation = "root"
+	child := event("child", "c", "turn_start", 1)
+	child.Relation = "child"
+	child.Parent = "r"
+	child.ParentGeneration = 1
+	child.Name = "old"
+	wait := event("wait", "c", "request_open", 2)
+	wait.Request = "approval"
+	answer := event("answer", "c", "request_resolved", 3)
+	answer.Request = "approval"
+	stop := event("stop", "c", "idle", 4)
+	stop.Name = "new"
+	lateIdentity := event("relation", "c", "identity", 5)
+	lateIdentity.Relation = "child"
+	lateIdentity.Parent = "r"
+	lateIdentity.ParentGeneration = 1
+	es := []Event{root, child, wait, answer, stop, lateIdentity}
+	expected, _ := json.Marshal(Reduce(es))
+	for seed := int64(0); seed < 100; seed++ {
+		p := append([]Event(nil), es...)
+		rng := rand.New(rand.NewSource(seed))
+		rng.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
+		got, _ := json.Marshal(Reduce(p))
+		if !bytes.Equal(expected, got) {
+			t.Fatalf("order changed snapshot at seed %d\n%s\n%s", seed, expected, got)
+		}
 	}
 }

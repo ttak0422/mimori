@@ -9,6 +9,8 @@ Nix locks nixpkgs c59305bab2065cfecc4944690d9eedbb56f3a9fa and uses Go 1.26.8.
   separate roots at one cwd, independent waits, resolution-before-open, ordered
   transitions, late parents, cycles, generation reuse, unknown child state,
   private permissions, spool capacity, concurrent ingestion, replay/conflicts,
+  100 authoritative-event permutations, scope-bound validators, response limits,
+  anonymous attention, actual provider-contract fixtures, stdin/lock deadlines,
   quarantine/symlinks, socket queries, singleton writer and restart epochs.
 - `go vet ./...`: passed.
 - `nix build .#default --no-link`: passed, including package tests.
@@ -22,12 +24,12 @@ Latest smoke measurement (one local run, not a production service-level objectiv
 
 | Measurement | Result |
 | --- | --- |
-| Direct socket unchanged query, 200 samples | median 0.053 ms; p95 0.217 ms |
-| CLI unchanged query, 30 samples | median 13.746 ms |
-| Unchanged response | 80 bytes |
-| One root aggregate response (52 observed sessions) | 383 bytes |
-| First daemon lifetime CPU, user + system | 0.043 s |
-| In-memory unchanged branch, 1,000-session snapshot | 12.54 ns/op, 0 allocations |
+| Direct socket unchanged query, 200 samples | median 0.037 ms; p95 0.061 ms |
+| CLI unchanged query, 30 samples | median 8.815 ms |
+| Unchanged response | 97 bytes |
+| One root aggregate response (52 observed sessions) | 472 bytes |
+| First daemon lifetime CPU, user + system | 0.032297 s |
+| In-memory unchanged branch, 1,000-session snapshot | 687.1 ns/op, 168 B/op, 7 allocations (scope hash included) |
 
 CPU covers startup, ingestion/reducer updates and these queries, measured with
 wait4 for the first daemon only. It is not a sustained idle CPU percentage.
@@ -45,9 +47,10 @@ exposed contention at the earlier 250 ms budget.
 
 ## Explicit limits / remaining acceptance work
 
-- Raw Claude/Codex adapters are synthetic-fixture tested, not live hook validated.
-  Real provider ordering, request correlations and parent identity need verification.
-  Raw parentage remains unclassified; normalized ingestion supports proven roots.
+- Raw Claude/Codex adapters now use verified public schema contracts and anonymous
+  fixtures, not live hook capture. Claude main/subagent identity and identified
+  elicitations are covered. Codex aliases, anonymous permission resolution and raw
+  ordering still lack source information; see providers.md and p0-status.md.
 - No PID/process-start identity probe, heartbeat, transcript collector, automatic
   generation discovery, or process-death inference. Liveness remains unknown.
 - No automatic retention/compaction, ended-session hiding, identity alias merge,
@@ -55,10 +58,13 @@ exposed contention at the earlier 250 ms budget.
 - Reducer replay is linear in event history per changed batch and ancestry walking
   depends on depth. Sequence conflict detection is linear on insert. The 100,000
   event limit bounds history; this is not a large-scale collector.
-- Invalid JSON, capacity, symlinks and file modes are tested. Actual disk-full and
-  power-loss fault injection have not been executed. Filesystem stalls still need
-  an external hook timeout. Concurrent raw hooks may hit bounded backpressure.
-- No remote CI workflow is enabled. This private PoC was validated locally without
+- Disk-full handling is tested via ENOSPC injection at spool create/write/sync and
+  an actual SQLite max_page_count failure on a disposable DB; queued data survives
+  and replays after capacity recovery. Commit-before-ack replay, file permission
+  failure and lock/stdin deadlines are tested. Physical power loss and a completely
+  full OS filesystem are not simulated. No user data was deleted or disk filled.
+- No custom remote test CI workflow is enabled. GitHub's automatic Dependency Graph
+  run succeeded for the first main commit; that is not a test suite. This private PoC was validated locally without
   authorizing hosted runner usage. Local test and Nix commands are reproducible.
 - Initial target is macOS; Linux build/runtime and real providers are next validation
   targets. Repository remains private and the license is undecided.

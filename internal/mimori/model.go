@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -32,12 +33,15 @@ func (e Event) Validate() error {
 		return errors.New("version=1, event_id, provider, session_id and positive generation required")
 	}
 	for _, v := range []string{e.ID, e.Provider, e.Session, e.Parent, e.Request, e.Name, e.CWD} {
+		if strings.ContainsRune(v, 0) {
+			return errors.New("NUL is not allowed in event fields")
+		}
 		if len(v) > 4096 {
 			return errors.New("field exceeds 4096 bytes")
 		}
 	}
 	switch e.Kind {
-	case "identity", "turn_start", "running", "idle", "ended", "request_open", "request_resolved":
+	case "identity", "turn_start", "running", "idle", "ended", "request_open", "request_resolved", "attention_unknown", "attention_clear":
 	default:
 		return errors.New("unsupported event kind")
 	}
@@ -76,6 +80,8 @@ type Session struct {
 	Aggregate          string   `json:"aggregate_state"`
 	RunningDescendants int      `json:"running_descendants"`
 	Unresolved         int      `json:"unresolved_requests"`
+	AttentionUnknown   bool     `json:"attention_unknown"`
+	UnresolvedExact    bool     `json:"unresolved_count_exact"`
 	Requests           []string `json:"request_ids"`
 	LastEventAt        string   `json:"last_event_at"`
 	Liveness           string   `json:"liveness"`
@@ -83,7 +89,9 @@ type Session struct {
 	Classification     string   `json:"classification"`
 	stateSeq           uint64
 	identitySeq        uint64
-	requestSeq         map[string]uint64
+	attentionSeq       uint64
+	cwdSeq             uint64
+	nameSeq            uint64
 	resolved           map[string]bool
 	requests           map[string]bool
 }
@@ -101,7 +109,7 @@ func Reduce(events []Event) []Session {
 			continue
 		}
 		if s == nil || s.Generation < e.Generation {
-			s = &Session{Provider: e.Provider, ID: e.Session, Generation: e.Generation, Relation: "unknown", State: "unknown", Liveness: "unknown", Ordering: "sequenced", requests: map[string]bool{}, resolved: map[string]bool{}, requestSeq: map[string]uint64{}}
+			s = &Session{Provider: e.Provider, ID: e.Session, Generation: e.Generation, Relation: "unknown", State: "unknown", Liveness: "unknown", Ordering: "sequenced", requests: map[string]bool{}, resolved: map[string]bool{}}
 			m[k] = s
 		}
 		if e.Seq == 0 {
@@ -116,16 +124,23 @@ func Reduce(events []Event) []Session {
 			s.ParentGeneration = e.ParentGeneration
 			s.identitySeq = e.Seq
 		}
-		if e.CWD != "" && s.CWD == "" {
+		if e.CWD != "" && (s.CWD == "" || e.Seq > s.cwdSeq) {
 			s.CWD = e.CWD
+			s.cwdSeq = e.Seq
 		}
-		if e.Name != "" && s.Name == "" {
+		if e.Name != "" && (s.Name == "" || e.Seq > s.nameSeq) {
 			s.Name = e.Name
+			s.nameSeq = e.Seq
 		}
 		if s.State == "ended" {
 			continue
 		}
 		switch e.Kind {
+		case "attention_unknown", "attention_clear":
+			if e.Seq == 0 || e.Seq > s.attentionSeq {
+				s.AttentionUnknown = e.Kind == "attention_unknown"
+				s.attentionSeq = e.Seq
+			}
 		case "request_open", "request_resolved":
 			// A resolved request ID is terminal: retries need a fresh request ID.
 			if e.Kind == "request_resolved" {
@@ -137,6 +152,7 @@ func Reduce(events []Event) []Session {
 		case "ended":
 			s.State = "ended"
 			s.Liveness = "ended"
+			s.AttentionUnknown = false
 			s.requests = map[string]bool{}
 		case "turn_start", "running", "idle":
 			if e.Seq > 0 && e.Seq <= s.stateSeq {
@@ -185,8 +201,9 @@ func Reduce(events []Event) []Session {
 		}
 		sort.Strings(s.Requests)
 		s.Unresolved = len(s.Requests)
+		s.UnresolvedExact = !s.AttentionUnknown
 		s.Aggregate = s.State
-		if s.Unresolved > 0 {
+		if s.Unresolved > 0 || !s.UnresolvedExact {
 			s.Aggregate = "waiting"
 		}
 	}
@@ -205,6 +222,9 @@ func Reduce(events []Event) []Session {
 				a.RunningDescendants++
 			}
 			a.Unresolved += len(s.Requests)
+			if s.AttentionUnknown {
+				a.UnresolvedExact = false
+			}
 			if s.State == "unknown" {
 				unknownDescendants[key(a.Provider, a.ID)] = true
 			}
@@ -212,7 +232,7 @@ func Reduce(events []Event) []Session {
 		}
 	}
 	for _, s := range m {
-		if s.Unresolved > 0 {
+		if s.Unresolved > 0 || !s.UnresolvedExact {
 			s.Aggregate = "waiting"
 		} else if s.RunningDescendants > 0 {
 			s.Aggregate = "running"

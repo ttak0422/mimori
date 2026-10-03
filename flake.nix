@@ -22,6 +22,6 @@
       checks = eachSystem (system: { package = self.packages.${system}.default; });
       devShells = eachSystem (system:
         let pkgs = import nixpkgs { inherit system; };
-        in { default = pkgs.mkShell { packages = [ pkgs.go pkgs.gopls ]; }; });
+        in { default = pkgs.mkShell { packages = [ pkgs.go pkgs.gopls pkgs.python3 ]; }; });
     };
 }

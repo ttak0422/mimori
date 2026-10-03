@@ -1,7 +1,9 @@
 package mimori
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,35 +29,57 @@ type Response struct {
 	Unclassified []Session `json:"unclassified,omitempty"`
 	Session      *Session  `json:"session,omitempty"`
 	Error        string    `json:"error,omitempty"`
+	ErrorCode    string    `json:"error_code,omitempty"`
+	Complete     bool      `json:"complete,omitempty"`
 }
 type Snapshot struct {
 	Revision string
 	Sessions []Session
 }
 
+// Validators bind the published revision to the exact query shape.
+func scopedRevision(base string, q Query) string {
+	scope, _ := json.Marshal([]string{q.Provider, q.Session})
+	sum := sha256.Sum256(scope)
+	return fmt.Sprintf("%s:%x", base, sum[:8])
+}
 func (s Snapshot) Query(q Query) Response {
-	r := Response{Version: 1, Revision: s.Revision}
+	r := Response{Version: 1, Revision: scopedRevision(s.Revision, q)}
 	if q.Version != 1 {
 		r.Error = "unsupported API version"
+		r.ErrorCode = "unsupported_version"
 		return r
 	}
 	if q.Session != "" && q.Provider == "" {
 		r.Error = "provider required for session detail"
+		r.ErrorCode = "invalid_query"
 		return r
 	}
-	if q.Revision == s.Revision {
+	if q.Session != "" {
+		for _, v := range s.Sessions {
+			if v.Provider == q.Provider && v.ID == q.Session {
+				v := v
+				r.Session = &v
+				break
+			}
+		}
+		if r.Session == nil {
+			r.Error = "session not found"
+			r.ErrorCode = "not_found"
+			return r
+		}
+	}
+	if q.Revision == r.Revision {
 		r.Unchanged = true
+		r.Session = nil
+		return r
+	}
+	r.Complete = true
+	if r.Session != nil {
 		return r
 	}
 	for _, v := range s.Sessions {
 		if q.Provider != "" && q.Provider != v.Provider {
-			continue
-		}
-		if q.Session != "" {
-			if v.ID == q.Session {
-				v := v
-				r.Session = &v
-			}
 			continue
 		}
 		if v.Classification != "resolved" {
@@ -64,10 +88,30 @@ func (s Snapshot) Query(q Query) Response {
 			r.Roots = append(r.Roots, v)
 		}
 	}
-	if q.Session != "" && r.Session == nil {
-		r.Error = "session not found"
-	}
 	return r
+}
+
+const MaxResponse = 4 * 1024 * 1024
+
+var errResponseLimit = errors.New("response exceeds 4 MiB; narrow provider filter or request a session")
+
+type responseBuffer struct{ bytes.Buffer }
+
+func (b *responseBuffer) Write(p []byte) (int, error) {
+	if b.Len()+len(p) > MaxResponse {
+		return 0, errResponseLimit
+	}
+	return b.Buffer.Write(p)
+}
+
+// Build a complete bounded frame before publishing any bytes, never a partial list.
+func writeResponse(w io.Writer, r Response) error {
+	var b responseBuffer
+	if err := json.NewEncoder(&b).Encode(r); err != nil {
+		return json.NewEncoder(w).Encode(Response{Version: 1, Revision: r.Revision, Error: err.Error(), ErrorCode: "response_too_large"})
+	}
+	_, err := w.Write(b.Bytes())
+	return err
 }
 func Serve(ctx context.Context, dir string, diagnose func(string)) error {
 	if err := EnsureDir(dir); err != nil {
@@ -154,13 +198,13 @@ func Serve(ctx context.Context, dir string, diagnose func(string)) error {
 			c.SetDeadline(time.Now().Add(2 * time.Second))
 			var q Query
 			if err := json.NewDecoder(io.LimitReader(c, 8192)).Decode(&q); err != nil {
-				json.NewEncoder(c).Encode(Response{Version: 1, Error: "invalid query"})
+				writeResponse(c, Response{Version: 1, Error: "invalid query", ErrorCode: "invalid_query"})
 				return
 			}
 			mu.RLock()
 			r := snap.Query(q)
 			mu.RUnlock()
-			json.NewEncoder(c).Encode(r)
+			writeResponse(c, r)
 		}()
 	}
 }
@@ -175,7 +219,7 @@ func Fetch(dir string, q Query) (Response, error) {
 	if err = json.NewEncoder(c).Encode(q); err != nil {
 		return r, err
 	}
-	err = json.NewDecoder(io.LimitReader(c, 64*1024*1024)).Decode(&r)
+	err = json.NewDecoder(io.LimitReader(c, MaxResponse+1)).Decode(&r)
 	if err == nil && r.Error != "" {
 		err = fmt.Errorf("query: %s", r.Error)
 	}

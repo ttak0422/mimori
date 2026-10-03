@@ -190,8 +190,8 @@ func TestHookPrivacyAndIdentity(t *testing.T) {
 		if err != nil || e.Kind != "idle" {
 			t.Fatal(e, err)
 		}
-		if _, err = NormalizeHook(provider, []byte(`{"session_id":"p","hook_event_name":"PermissionRequest"}`), 1); err == nil {
-			t.Fatal("invented request ID")
+		if missing, err := NormalizeHook(provider, []byte(`{"session_id":"p","hook_event_name":"PermissionRequest"}`), 1); err != nil || missing.Kind != "attention_unknown" || missing.Request != "" {
+			t.Fatal("uncorrelated wait lost", missing, err)
 		}
 	}
 }

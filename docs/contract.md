@@ -40,11 +40,12 @@ identity, independent of which terminal or sidebar happens to display it.
 | ended | terminal for this generation; clears its own requests |
 | request_open | Add one unresolved request ID |
 | request_resolved | Permanently resolve this request ID, even if received before open |
+| attention_unknown | Record attention whose exact request correlation is missing |
+| attention_clear | Clear that uncertainty only on verified external evidence |
 
 A retry/new request needs a new request ID. Completing one child, receiving a
 notification, or finishing a turn does not clear any other request. Ended parents
-can still aggregate active children. First nonempty cwd/name are informational;
-there is no rename support yet. Event observations are not heartbeats:
+can still aggregate active children. For sequenced events the latest supplied cwd/name wins; raw metadata is best effort. Event observations are not heartbeats:
 `liveness` is always `unknown`, except an explicit `ended` observation. No PID
 inspection is performed, so PID reuse cannot create a false liveness claim.
 
@@ -57,16 +58,19 @@ newline-terminated response. One request per connection; API version is required
 {"version":1,"revision":"optional previous revision","provider":"optional filter","session_id":"optional detail ID"}
 ```
 
-A snapshot returns `version`, `revision`, `roots`, and `unclassified` (empty lists
+A snapshot returns `version`, `revision`, `complete: true`, `roots`, and `unclassified` (empty lists
 may be omitted). A detail query requires provider and returns `session`; missing
-sessions return `error`. Session records expose self/aggregate state, ancestry,
+sessions return `error_code: not_found`. Unsupported versions use `unsupported_version`. Session records expose self/aggregate state, ancestry,
 running descendant count, subtree unresolved request count, own unresolved request
-IDs, last observed event time, ordering quality and liveness. Revision and snapshot
+IDs, last observed event time, ordering quality and liveness.
+`attention_unknown` is the session's uncorrelated wait marker; subtree
+`unresolved_count_exact: false` means the numeric count covers known IDs only.
+Anonymous attention keeps aggregate waiting until verified clear/end/new generation. Revision and snapshot
 are captured together. No collection, filesystem scan or transcript access is
 triggered by a query.
 
-A matching revision returns only version, revision and `unchanged: true`. Cache
-revisions separately for each query shape/filter. Every daemon start creates a new
+A matching revision returns only version, revision and `unchanged: true`. The validator includes a hash of query shape/filter, so cross-scope reuse returns
+a full response. Cache revisions separately for each query shape/filter. Every daemon start creates a new
 random epoch, so a client must resync even if event count has not changed. The
 revision can advance for an accepted event that does not change visible state.
 
@@ -74,7 +78,9 @@ The collector scans spool every 100 ms, up to 128 files per batch. Queries read 
 last published snapshot while a batch is processed. Publication happens only after
 successful DB commit. Connections have a two-second deadline and a 32-handler cap;
 a busy server closes excess connections. Clients should back off on failure and
-avoid concurrent polls. Large-response pagination is future work.
+avoid concurrent polls. Responses over 4 MiB return `response_too_large`, never a
+partially successful list. Narrow provider filters or use session detail. Pagination
+is future work. Clients must keep their old snapshot on any error.
 
 ## Durability, limits and diagnostics
 
@@ -88,8 +94,10 @@ The spool and quarantine each allow at most 4096 files; each input is at most
 stderr diagnostics. A database write failure leaves the event queued. Disk-full,
 permission, capacity and lock failures are reported by nonzero exit status.
 Ingest waits at most one second for stdin and one second for the short spool lock.
-Filesystem operations may stall independently; set a provider hook timeout (for
-example two seconds) and choose the provider's nonblocking/async mode if supported.
+A two-second process-level watchdog also covers ingest/hook filesystem calls.
+A deadline may expire after a rename already succeeded, so retry normalized events
+with the same event ID. An outer provider timeout remains advisable for OS-level
+process scheduling/I/O stalls; choose a nonblocking/async mode if supported.
 Mimori prints no hook decision or success payload to stdout.
 
 At 100,000 unique events the collector refuses new events, preserving queued data.
