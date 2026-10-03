@@ -52,7 +52,10 @@ Concurrent callers share the same daemon per state directory. The daemon survive
 caller cancellation and editor/terminal exit. It has no idle shutdown and installs
 no login service. A query never starts it. For foreground diagnostics, stop your
 known daemon and run `mimori daemon --state-dir ...` yourself; detached runtime
-diagnostics go to `/dev/null`, while startup errors are reported to `ensure`.
+stdio goes to `/dev/null`, while startup errors are reported to `ensure`.
+`mimori query` includes `latest_collector_diagnostic` after a collection error,
+even for unchanged snapshots. It retains only the latest bounded message and
+observation time until daemon restart; it is historical, not a current health verdict.
 Ingest also works while it is stopped. A query failure exits nonzero and must be
 shown as stale/unavailable by clients, not interpreted as a live status.
 

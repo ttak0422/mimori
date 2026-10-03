@@ -137,3 +137,16 @@ Readiness uses a v1 query with `"health":true`; its complete response contains o
 version and revision and does not enumerate sessions. This is transport readiness,
 not agent liveness, and clients must never cache it as an empty root snapshot.
 Normal query behavior and durable offline ingest are unchanged.
+
+
+A response may additionally contain `latest_collector_diagnostic` with `message`
+(at most 4096 UTF-8 bytes) and `observed_at` (UTC RFC3339). The daemon retains only
+the latest collector error in memory, including malformed/quarantined events and
+database-write failures. It is exposed through the existing private query socket,
+without a new file/log or query-triggered collection. Startup errors still go to
+`ensure` stderr. The optional field is included on unchanged responses without
+advancing the session revision: a client can inspect it independently of cached
+agent rows. It records historical evidence, not current transport/agent health;
+a later successful collection does not clear it. Restart clears this in-memory
+record. Raw event payloads are never included. This is bounded inspection, not a
+persistent diagnostic history.

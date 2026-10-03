@@ -240,3 +240,48 @@ func TestEnsureRelaysChildStorageFailure(t *testing.T) {
 		t.Fatal(err, string(b))
 	}
 }
+
+func TestDetachedCollectorDiagnosticRemainsInspectable(t *testing.T) {
+	dir, _ := lifecycleState(t)
+	cliJSON(t, dir, "ensure")
+	initial := cliJSON(t, dir, "query")
+	revision := initial["revision"].(string)
+	if initial["latest_collector_diagnostic"] != nil {
+		t.Fatal("unexpected initial diagnostic")
+	}
+	// Synthetic malformed input reaches the ongoing collector after readiness.
+	if err := os.WriteFile(filepath.Join(dir, "spool", "malformed.json"), []byte("SENSITIVE_FIXTURE_NOT_JSON"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var latest map[string]any
+	for time.Now().Before(deadline) {
+		response := cliJSON(t, dir, "query", "--revision", revision)
+		if response["unchanged"] != true || response["revision"] != revision {
+			t.Fatal("diagnostic changed agent revision", response)
+		}
+		if value, ok := response["latest_collector_diagnostic"].(map[string]any); ok {
+			latest = value
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if latest == nil {
+		t.Fatal("detached diagnostic lost")
+	}
+	message, _ := latest["message"].(string)
+	if !strings.Contains(message, "invalid spool event") || strings.Contains(message, "SENSITIVE_FIXTURE") || len(message) > 4096 {
+		t.Fatal(latest)
+	}
+	stamp, _ := latest["observed_at"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+		t.Fatal(latest, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "quarantine", "malformed.json")); err != nil {
+		t.Fatal(err)
+	}
+	// A complete read still exposes the latest historical diagnosis.
+	if cliJSON(t, dir, "query")["latest_collector_diagnostic"] == nil {
+		t.Fatal("diagnostic not retained")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,16 +24,25 @@ type Query struct {
 	Provider string `json:"provider,omitempty"`
 	Session  string `json:"session_id,omitempty"`
 }
+
+// CollectorDiagnostic is the latest historical collection error, not a health
+// verdict. It is held only for this daemon lifetime and never stores payloads.
+type CollectorDiagnostic struct {
+	Message    string `json:"message"`
+	ObservedAt string `json:"observed_at"`
+}
+
 type Response struct {
-	Version      int       `json:"version"`
-	Revision     string    `json:"revision"`
-	Unchanged    bool      `json:"unchanged,omitempty"`
-	Roots        []Session `json:"roots,omitempty"`
-	Unclassified []Session `json:"unclassified,omitempty"`
-	Session      *Session  `json:"session,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	ErrorCode    string    `json:"error_code,omitempty"`
-	Complete     bool      `json:"complete,omitempty"`
+	LatestCollectorDiagnostic *CollectorDiagnostic `json:"latest_collector_diagnostic,omitempty"`
+	Version                   int                  `json:"version"`
+	Revision                  string               `json:"revision"`
+	Unchanged                 bool                 `json:"unchanged,omitempty"`
+	Roots                     []Session            `json:"roots,omitempty"`
+	Unclassified              []Session            `json:"unclassified,omitempty"`
+	Session                   *Session             `json:"session,omitempty"`
+	Error                     string               `json:"error,omitempty"`
+	ErrorCode                 string               `json:"error_code,omitempty"`
+	Complete                  bool                 `json:"complete,omitempty"`
 }
 type Snapshot struct {
 	Revision string
@@ -134,10 +144,21 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 		return err
 	}
 	defer store.Close()
-	store.Drain(dir, diagnose)
+	var mu sync.RWMutex
+	var diagnostic *CollectorDiagnostic
+	report := func(message string) {
+		if len(message) > 4096 {
+			message = message[:4096]
+		}
+		message = strings.ToValidUTF8(message, "")
+		mu.Lock()
+		diagnostic = &CollectorDiagnostic{Message: message, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		mu.Unlock()
+		diagnose(message)
+	}
+	store.Drain(dir, report)
 	epoch := NewID()
 	snap := Snapshot{revision(epoch, len(store.events)), Reduce(store.events)}
-	var mu sync.RWMutex
 	path := filepath.Join(dir, "query.sock")
 	if st, err := os.Lstat(path); err == nil {
 		if st.Mode()&os.ModeSocket == 0 {
@@ -182,7 +203,7 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 				listener.Close()
 				return
 			case <-ticker.C:
-				if store.Drain(dir, diagnose) {
+				if store.Drain(dir, report) {
 					next := Snapshot{revision(epoch, len(store.events)), Reduce(store.events)}
 					mu.Lock()
 					snap = next
@@ -226,6 +247,7 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 			} else {
 				r = snap.Query(q)
 			}
+			r.LatestCollectorDiagnostic = diagnostic
 			mu.RUnlock()
 			writeResponse(c, r)
 		}()

@@ -79,7 +79,10 @@ without epoch change, SIGKILL/stale-socket restart, loss of the initiating proce
 group before readiness, and timeout without killing the child. It also verifies
 read-only query behavior, live incompatible endpoint preservation (including the
 foreground daemon path), private-directory checks, regular-file preservation,
-and startup storage-error delivery. Test daemon PIDs originate from the isolated
+and startup storage-error delivery. A malformed event injected after detached
+readiness verifies that the latest bounded collector diagnostic remains queryable
+on unchanged replies, excludes the raw fixture payload, and accompanies quarantine.
+Test daemon PIDs originate from the isolated
 test helper; fixtures and cleanup stay under disposable `/tmp` directories.
 
 `GOCACHE=/tmp/mimori-go-cache go test -race ./...`, `go vet ./...`, and native
@@ -95,5 +98,5 @@ socket samples measured median 0.055 ms / p95 0.093 ms. Unchanged responses were
 measurements, not latency guarantees. The 5-second readiness default allows
 substantial cold startup margin and remains configurable up to one minute;
 large retained stores can still exceed it and return a bounded error while the
-independent daemon continues startup. Detached runtime diagnostics are discarded;
-foreground `daemon` remains available for diagnosis.
+independent daemon continues startup. The latest collector diagnostic is retained in bounded memory and exposed by
+query, including unchanged replies; foreground `daemon` also prints diagnostics.
