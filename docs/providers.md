@@ -1,7 +1,7 @@
 # Provider compatibility and evidence
 
-Local versions checked: Claude Code 2.1.281 and Codex CLI 0.159.2. No live provider
-session, private transcript, hook installation or paid model request was used.
+Compatibility evidence: Claude Code 2.1.281 and Codex CLI 0.159.2 contracts.
+Validation uses synthetic fixtures; live hook capture has not been tested.
 
 ## Verified contracts
 
@@ -84,5 +84,5 @@ and process/session-index scanning are not fallback mechanisms.
 Exact raw permission resolution, Codex parent/session aliasing and authoritative
 raw ordering cannot be reconstructed from these payloads alone. Options are an
 explicit normalized producer, a verified provider event API, or narrowly scoped
-additional metadata collection. Choosing/enabling such an ongoing source requires
-an integration decision; this PoC enables none. Existing hooks are untouched.
+additional metadata collection. Such a source must establish the missing identity
+and ordering guarantees explicitly; none is enabled by this PoC.

@@ -1,26 +1,24 @@
-# P0 reconciliation — 2026-10-03
+# Backend implementation status
 
-The original project separates five P0 tasks from Neovim/komado integration and
-service deployment/retention work marked P1. The following distinguishes working
-core behavior, information limits and decisions. A successful normalized demo does
-not imply perfect live raw-provider fidelity.
+This document distinguishes verified core behavior from information limits and
+remaining work. A successful normalized demo does not imply complete live
+raw-provider fidelity.
 
-## P0 tasks
+## Core capabilities
 
 | Requirement | Evidence / status | Remaining decision or boundary |
 | --- | --- | --- |
-| Repository and Go/Nix baseline | Private ttak0422/mimori; pinned flake; local build/check | License deliberately unspecified; owner may select a redistribution license later |
-| Target versions, payloads, anonymous fixtures, identity and transitions | Local versions identified; Claude official docs and Codex 0.159.2 immutable generated schemas; testdata/hooks.json; contract.md | Actual installed-runtime capture not performed; no hook installation authorized |
+| Repository and Go/Nix baseline | Pinned Go/Nix build and checks | License deliberately unspecified; owner may select a redistribution license later |
+| Target versions, payloads, anonymous fixtures, identity and transitions | Versioned contracts checked; Claude official docs and Codex 0.159.2 immutable generated schemas; testdata/hooks.json; contract.md | Live runtime hook capture not yet verified |
 | Ingest → spool → daemon → SQLite → CLI | Separate-process smoke, offline receipt, crash/replay, lock and private permissions | No blocker for this local path |
 | Reducer and both initial providers | 50 children + grandchild, multiple requests, permutations, late identity, cycles, generation-local terminal state; adapters for both | Exact raw anonymous permission resolution and Codex identity aliases cannot be inferred from verified input; explicit normalized producer/additional source needed |
 | Query/revision/performance | Scoped validators, restart epoch, multiple clients, NotFound/version/size errors, socket/CLI/CPU/byte measurements | Large-scale optimization and pagination not required to prove the initial bounded path |
 
-No PID is used to infer liveness. The specification conditions PID/start-time
-matching on using PID; this implementation always reports liveness unknown unless
+No PID is used to infer liveness. The implementation reports liveness unknown unless
 explicit end was observed. Generation-reuse tests ensure an old incarnation cannot
 mutate a new one. They are not claimed as OS PID-probe tests.
 
-## Nine acceptance criteria
+## Verified behavior
 
 1. **Verified:** one root with 50 children and a grandchild; individual detail query.
 2. **Verified:** separate roots at the same cwd; unknown/cyclic identities preserved.
@@ -40,11 +38,10 @@ mutate a new one. They are not claimed as OS PID-probe tests.
    tentative 1–2 second visible-client interval.
 8. **Verified fault paths:** malformed input, capacity, private permissions,
    write/sync ENOSPC injection, SQLite disk-full, replay after failure, bounded
-   stdin/lock wait and process-level ingest deadline. No full user disk or real
-   data deletion was used. Physical power loss remains outside these tests.
-9. **Backend independence verified; actual komado exercise is P1:** CLI/socket
-   clients do not own the collector; multiple clients can exit independently.
-   Running two real komado instances awaits the explicitly later adapter task.
+   stdin/lock wait and process-level ingest deadline. Physical power loss remains outside these tests.
+9. **Backend independence verified:** CLI/socket clients do not own the collector;
+   multiple clients can exit independently. Editor integration is maintained
+   separately from the backend.
 
 ## What remains required for stronger live-provider claims
 
@@ -61,19 +58,13 @@ These are information/access boundaries, not more synthetic-test coverage:
   or global sequence. A trusted launcher/producer must supply these, or a future
   provider source must establish them. Receipt timestamps are not substitutes.
 
-The available authorized work establishes normalized consistency and honest raw
-observation. It does not authorize enabling an ongoing API subscription, reading
-private transcripts or installing real hooks to bridge these gaps. The next
-integration decision is which explicit metadata source/producer to support and
-whether isolated real-provider capture is desired. No account, credential or
-paid run has been requested.
+Stronger guarantees require an explicit metadata source or normalized producer.
+The backend does not subscribe to external APIs, inspect transcripts, or install
+provider hooks automatically.
 
-## Explicitly later scope
+## Remaining scope
 
-The project P1 list places the generic Neovim Lua client and thin komado adapter,
-service startup settings, retention/cleanup, old-hook migration and rollback later.
-The new Neovim design note is conditional on a completed backend and does not
-silently move that client work into P0. Automatic retention and persistent service
-installation therefore remain deferred; only owned disposable test data was cleaned.
-Public release/license selection, hosted test CI and Linux runtime certification
-also remain unclaimed. No blocker prevents using the tested local normalized PoC.
+Automatic retention/compaction, persistent service installation, Linux runtime
+validation and hosted test CI remain open. Editor adapters can use the query and
+on-demand lifecycle contracts independently. No redistribution license has been
+selected.

@@ -39,11 +39,9 @@ interval is a reasonable initial experiment at this scale, not a verified target
 for large repositories. Keep one outstanding request, pause hidden clients and
 back off on errors. Collection publishes on a 100 ms interval.
 
-macOS sandbox initially denied Unix socket bind; integration/race/smoke tests were
-then run outside that sandbox with isolated `/tmp/mm-*` state. No user's active
-provider hooks, agent sessions, client configuration or launch services were used.
-The ingest lock budget was adjusted to one second after the concurrent fsync test
-exposed contention at the earlier 250 ms budget.
+Socket/process tests require an environment that permits Unix socket binding.
+All fixtures use disposable state directories. The ingest lock budget is one
+second to accommodate concurrent durable writes.
 
 ## Explicit limits / remaining acceptance work
 
@@ -54,7 +52,7 @@ exposed contention at the earlier 250 ms budget.
 - No PID/process-start identity probe, heartbeat, transcript collector, automatic
   generation discovery, or process-death inference. Liveness remains unknown.
 - No automatic retention/compaction, ended-session hiding, identity alias merge,
-  paging, migrations, service installation, komado adapter or old-hook migration.
+  paging, migrations, or service installation. Editor adapters are separate clients.
 - Reducer replay is linear in event history per changed batch and ancestry walking
   depends on depth. Sequence conflict detection is linear on insert. The 100,000
   event limit bounds history; this is not a large-scale collector.
@@ -62,15 +60,10 @@ exposed contention at the earlier 250 ms budget.
   an actual SQLite max_page_count failure on a disposable DB; queued data survives
   and replays after capacity recovery. Commit-before-ack replay, file permission
   failure and lock/stdin deadlines are tested. Physical power loss and a completely
-  full OS filesystem are not simulated. No user data was deleted or disk filled.
-- No custom remote test CI workflow is enabled. GitHub's automatic Dependency Graph
-  run succeeded for the first main commit; that is not a test suite. This private PoC was validated locally without
-  authorizing hosted runner usage. Local test and Nix commands are reproducible.
-- Initial target is macOS; Linux build/runtime and real providers are next validation
-  targets. Repository remains private and the license is undecided.
-
-The existing komado display problem is not marked fixed: this delivers the
-independent backend PoC, with client adoption and live-provider fidelity still open.
+  full OS filesystem are not simulated.
+- No custom remote test CI workflow is configured. The Go and Nix checks above
+  are reproducible locally; dependency graph checks are not a test suite.
+- Linux build/runtime and live provider sessions remain validation targets.
 
 ## On-demand lifecycle validation (2026-10-03 UTC)
 
@@ -82,13 +75,11 @@ foreground daemon path), private-directory checks, regular-file preservation,
 and startup storage-error delivery. A malformed event injected after detached
 readiness verifies that the latest bounded collector diagnostic remains queryable
 on unchanged replies, excludes the raw fixture payload, and accompanies quarantine.
-Test daemon PIDs originate from the isolated
-test helper; fixtures and cleanup stay under disposable `/tmp` directories.
+Fixtures and daemon processes are isolated and cleaned up by the test helper.
 
-`GOCACHE=/tmp/mimori-go-cache go test -race ./...`, `go vet ./...`, and native
-`nix flake check --no-update-lock-file --no-write-lock-file` passed. Host sandbox
-socket binding was denied, so socket/process tests used the normal narrowly
-approved external execution. Linux runtime behavior has not been executed here.
+`go test -race ./...`, `go vet ./...`, and
+`nix flake check --no-update-lock-file --no-write-lock-file` passed on macOS.
+Linux runtime behavior has not been tested.
 
 The 52-session smoke fixture passed crash recovery and durable offline ingest.
 On this run, 30 CLI query samples measured median 8.75 ms / p95 10.03 ms; 30
