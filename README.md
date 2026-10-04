@@ -7,38 +7,31 @@ terminal multiplexer, transcript reader, cloud service, or agent launcher is nee
 
 ## Try it
 
-Requires macOS or Linux. Nix provides the reproducible build and development shell:
+Requires macOS or Linux and Nix with flakes enabled. Install `mimori` into your
+environment, for example with a Nix profile:
 
 ```sh
-nix develop
-nix build
-nix flake check
-# Alternatively, with Go >= 1.25:
-go build -o bin/mimori ./cmd/mimori
-python3 scripts/smoke.py bin/mimori
+nix profile install github:ttak0422/mimori
 ```
 
-The smoke test creates an isolated temporary directory, queues a root, 50 children
-and a grandchild while the daemon is stopped, checks two independent permission
-requests, kills/restarts the daemon, measures polling, and cleans up its processes.
-
-For an interactive demo, in terminal 1:
+The commands below assume `mimori` is available on `PATH`. For an interactive demo,
+run from this repository's root in both terminals. In terminal 1:
 
 ```sh
-./bin/mimori ingest < examples/root.json
-./bin/mimori daemon
+mimori ingest < examples/root.json
+mimori daemon
 ```
 
 In terminal 2:
 
 ```sh
-./bin/mimori ingest < examples/child-waiting.json
-./bin/mimori query
-./bin/mimori query --provider demo --session child
-./bin/mimori ingest < examples/child-resolved.json
-./bin/mimori query
+mimori ingest < examples/child-waiting.json
+mimori query
+mimori query --provider demo --session child
+mimori ingest < examples/child-resolved.json
+mimori query
 # Reuse a revision only with the same query/filter:
-./bin/mimori query --revision '<revision from previous response>'
+mimori query --revision '<revision from previous response>'
 ```
 
 Commands default to `$XDG_STATE_HOME/mimori` or `~/.local/state/mimori`.
@@ -58,6 +51,24 @@ even for unchanged snapshots. It retains only the latest bounded message and
 observation time until daemon restart; it is historical, not a current health verdict.
 Ingest also works while it is stopped. A query failure exits nonzero and must be
 shown as stale/unavailable by clients, not interpreted as a live status.
+
+## Development
+
+Nix provides the reproducible build and development tools. `nix develop` supplies
+Go, gopls and Python; it does not install the `mimori` command.
+
+```sh
+nix develop
+nix build
+nix flake check
+# Alternatively, build and smoke-test with Go >= 1.25:
+go build -o bin/mimori ./cmd/mimori
+python3 scripts/smoke.py bin/mimori
+```
+
+The smoke test creates an isolated temporary directory, queues a root, 50 children
+and a grandchild while the daemon is stopped, checks two independent permission
+requests, kills/restarts the daemon, measures polling, and cleans up its processes.
 
 ## What the PoC establishes
 
