@@ -46,6 +46,16 @@ caller cancellation and editor/terminal exit. It has no idle shutdown and instal
 no login service. A query never starts it. For foreground diagnostics, stop your
 known daemon and run `mimori daemon --state-dir ...` yourself; detached runtime
 stdio goes to `/dev/null`, while startup errors are reported to `ensure`.
+Package/pin upgrades do not replace a running daemon. Both `ensure` and `query`
+require the daemon to advertise `ended_retention_seconds: 300`, independently of
+API v1, so an older daemon cannot silently return unbounded ended history.
+A missing or different policy produces an actionable error, without stopping the
+listener or starting a competitor. After upgrading, restart your known daemon
+with the current executable through its existing owner/service. Durable events
+are replayed, and expired ended sessions are excluded on the **first query**;
+no timer tick or new hook event is required. `last_event_at` alone never turns
+idle, unknown, running, or waiting sessions into ended sessions.
+
 `mimori query` includes `latest_collector_diagnostic` after a collection error,
 even for unchanged snapshots. It retains only the latest bounded message and
 observation time until daemon restart; it is historical, not a current health verdict.

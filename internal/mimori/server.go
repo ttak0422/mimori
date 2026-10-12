@@ -33,6 +33,7 @@ type CollectorDiagnostic struct {
 }
 
 type Response struct {
+	EndedRetentionSeconds     int                  `json:"ended_retention_seconds,omitempty"`
 	LatestCollectorDiagnostic *CollectorDiagnostic `json:"latest_collector_diagnostic,omitempty"`
 	TitleStatus               string               `json:"title_status,omitempty"`
 	Version                   int                  `json:"version"`
@@ -105,7 +106,7 @@ func (s Snapshot) visibleAt(now time.Time) Snapshot {
 
 func (s Snapshot) queryAt(q Query, now time.Time) Response {
 	s = s.visibleAt(now)
-	r := Response{Version: 1, Revision: scopedRevision(s.Revision, q)}
+	r := Response{Version: 1, EndedRetentionSeconds: int(EndedRetention / time.Second), Revision: scopedRevision(s.Revision, q)}
 	if q.Version != 1 {
 		r.Error = "unsupported API version"
 		r.ErrorCode = "unsupported_version"
@@ -296,7 +297,7 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 			mu.RLock()
 			var r Response
 			if q.Health && q.Version == 1 {
-				r = Response{Version: 1, Revision: scopedRevision(snap.Revision, q), Complete: true}
+				r = Response{Version: 1, EndedRetentionSeconds: int(EndedRetention / time.Second), Revision: scopedRevision(snap.Revision, q), Complete: true}
 			} else {
 				view, titleStatus := titles.view(ctx, snap, time.Now())
 				r = view.Query(q)
@@ -320,6 +321,9 @@ func Fetch(dir string, q Query) (Response, error) {
 		return r, err
 	}
 	err = json.NewDecoder(io.LimitReader(c, MaxResponse+1)).Decode(&r)
+	if err == nil && r.Error == "" {
+		err = requireRetention(r)
+	}
 	if err == nil && r.Error != "" {
 		err = fmt.Errorf("query: %s", r.Error)
 	}

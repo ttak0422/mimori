@@ -137,6 +137,24 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
+	// Model a bounded consumer, not a backend limit. One extra expired session
+	// is enough to overflow its display if the first query leaks old history.
+	const exampleDisplayCapacity = 10
+	const expiredHistoryCount = exampleDisplayCapacity + 1
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < expiredHistoryCount; i++ {
+		old := event(fmt.Sprintf("old-%d", i), fmt.Sprintf("old-%d", i), "ended", 1)
+		old.Relation = "unknown"
+		old.ObservedAt = time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+		if err := Enqueue(dir, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Drain(dir, func(message string) { t.Fatal(message) })
+	store.Close()
 	e := event("end", "r", "ended", 1)
 	e.Relation = "root"
 	e.ObservedAt = time.Now().Add(-EndedRetention + 2*time.Second).UTC().Format(time.RFC3339Nano)
@@ -164,7 +182,7 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal("startup timeout")
 	}
 	before, err := Fetch(dir, Query{Version: 1})
-	if err != nil || len(before.Roots) != 1 {
+	if err != nil || len(before.Roots) != 1 || len(before.Unclassified) != 0 {
 		t.Fatalf("before: %+v %v", before, err)
 	}
 	q := Query{Version: 1, Revision: before.Revision}
@@ -195,15 +213,17 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenStore(dir)
+	store, err = OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if len(store.events) != 1 || store.events[0].ID != e.ID {
-		t.Fatal("durable history removed")
+	// The backlog plus the single time-boundary event must all remain durable.
+	if want := expiredHistoryCount + 1; len(store.events) != want {
+		t.Fatalf("durable event count = %d, want %d", len(store.events), want)
 	}
-	if len((Snapshot{"restart", Reduce(store.events)}).Query(Query{Version: 1}).Roots) != 0 {
+	replayed := (Snapshot{"restart", Reduce(store.events)}).Query(Query{Version: 1})
+	if len(replayed.Roots) != 0 || len(replayed.Unclassified) != 0 {
 		t.Fatal("replay resurrected history")
 	}
 }

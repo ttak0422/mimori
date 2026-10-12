@@ -14,8 +14,17 @@ import (
 	"time"
 )
 
-// Probe only accepts a complete v1 response. A connected but unresponsive or
-// incompatible endpoint is never treated as an absent daemon.
+// requireRetention checks semantics independently of the wire API version. Old
+// v1 daemons survive package upgrades and must not silently serve unbounded history.
+func requireRetention(r Response) error {
+	if r.EndedRetentionSeconds != int(EndedRetention/time.Second) {
+		return errors.New("live daemon does not advertise the required ended-session retention; restart your known mimori daemon with the current executable (no daemon was stopped or replaced)")
+	}
+	return nil
+}
+
+// Probe only accepts a complete v1 response with the required retention policy.
+// A connected but unresponsive or incompatible endpoint is never treated as absent.
 func probe(ctx context.Context, dir string) (bool, error) {
 	path := filepath.Join(dir, "query.sock")
 	if st, err := os.Lstat(path); err == nil {
@@ -47,6 +56,9 @@ func probe(ctx context.Context, dir string) (bool, error) {
 	}
 	if r.Version != 1 || !r.Complete || r.Revision == "" || r.Unchanged || r.Error != "" || r.ErrorCode != "" {
 		return false, errors.New("live endpoint has an incompatible readiness contract")
+	}
+	if err := requireRetention(r); err != nil {
+		return false, err
 	}
 	return true, nil
 }
