@@ -55,7 +55,55 @@ func scopedRevision(base string, q Query) string {
 	sum := sha256.Sum256(scope)
 	return fmt.Sprintf("%s:%x", base, sum[:8])
 }
-func (s Snapshot) Query(q Query) Response {
+
+// EndedRetention bounds the query view only; durable events are never purged.
+const EndedRetention = 5 * time.Minute
+
+func (s Snapshot) Query(q Query) Response { return s.queryAt(q, time.Now()) }
+
+// visibleAt runs before response limits and validators. Keep ancestors of every
+// retained descendant, even idle/unknown ones, so tree navigation stays intact.
+func (s Snapshot) visibleAt(now time.Time) Snapshot {
+	byKey := make(map[string]Session, len(s.Sessions))
+	keep := make(map[string]bool, len(s.Sessions))
+	for _, v := range s.Sessions {
+		byKey[key(v.Provider, v.ID)] = v
+	}
+	for _, v := range s.Sessions {
+		ended, err := time.Parse(time.RFC3339Nano, v.EndedAt)
+		if v.State == "ended" && v.Aggregate == "ended" && err == nil && !now.Before(ended.Add(EndedRetention)) {
+			continue
+		}
+		for {
+			k := key(v.Provider, v.ID)
+			if keep[k] {
+				break
+			}
+			keep[k] = true
+			if v.Relation != "child" {
+				break
+			}
+			parent, ok := byKey[key(v.Provider, v.Parent)]
+			if !ok || parent.Generation != v.ParentGeneration {
+				break
+			}
+			v = parent
+		}
+	}
+	out := Snapshot{Revision: s.Revision}
+	h := sha256.New()
+	for _, v := range s.Sessions {
+		if keep[key(v.Provider, v.ID)] {
+			out.Sessions = append(out.Sessions, v)
+			fmt.Fprintf(h, "%s\x00%s\x00%d\n", v.Provider, v.ID, v.Generation)
+		}
+	}
+	out.Revision = fmt.Sprintf("%s:%x", s.Revision, h.Sum(nil))
+	return out
+}
+
+func (s Snapshot) queryAt(q Query, now time.Time) Response {
+	s = s.visibleAt(now)
 	r := Response{Version: 1, Revision: scopedRevision(s.Revision, q)}
 	if q.Version != 1 {
 		r.Error = "unsupported API version"
