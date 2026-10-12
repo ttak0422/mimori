@@ -77,7 +77,9 @@ provider sequence; clock changes and delayed delivery can still reorder raw stat
 The parser copies only identity/cwd/correlation metadata. Prompt, tool input/output,
 MCP message/content/URL and transcript paths are not saved or read. Tool use IDs or
 explicit normalized request IDs are needed for exact sets. Whole transcript access
-and process/session-index scanning are not fallback mechanisms.
+and process/session-index scanning are not fallback mechanisms. The optional
+App Server title lookup below uses only known IDs and never broadens this into
+a session discovery mechanism.
 
 ## Remaining information boundary
 
@@ -86,3 +88,77 @@ raw ordering cannot be reconstructed from these payloads alone. Options are an
 explicit normalized producer, a verified provider event API, or narrowly scoped
 additional metadata collection. Such a source must establish the missing identity
 and ordering guarantees explicitly; none is enabled by this PoC.
+
+## Provider session titles
+
+The optional query `title` is separate from the normalized producer's `name`.
+Consumers should prefer `title`, then `name`, then cwd context, while retaining
+both original fields for detail views. Empty titles clear the override. Titles
+never identify, merge, reparent, resume, or extend the retention of a session.
+
+### Claude Code
+
+Claude Code 2.1.281 and the [hook reference](https://code.claude.com/docs/en/hooks)
+provide `session_title` on SessionStart and UserPromptSubmit. Mimori allowlists
+only that field on main-session hooks. A missing, null, empty, or whitespace-only
+value clears the previous custom title; other hooks and subagent envelopes do not
+change the parent title. This also safely falls back for older versions that omit
+the field. Repeated renames arrive on the next supported hook. A rename followed
+by no prompt/resume cannot be observed immediately through these hooks; there is
+no transcript scan or additional Claude polling process.
+
+Unsequenced hook updates are ordered by mimori's observation timestamp and then
+event ID. This protects against delayed spool delivery, not provider events that
+arrive at the hook out of order: the provider supplies no rename sequence. A
+sequenced normalized producer retains sequence authority. The separate `title`
+event may update an already-known generation without changing activity, ordering,
+`last_event_at`, or `ended_at`; it cannot create a session or generation.
+
+### Codex App Server (optional)
+
+Set `MIMORI_CODEX_SOCKET` to the absolute path of an **already-running** local
+Codex App Server Unix control socket before starting mimori. The existing
+`codex app-server daemon version` command reports the daemon's socket when
+available. Mimori never starts, resumes, subscribes to, or stops Codex. No socket
+configuration means this integration is disabled. An existing mimori daemon
+keeps its startup environment until restarted by its owner.
+
+The [App Server contract](https://developers.openai.com/codex/app-server/) and
+Codex 0.160.0 generated schema expose `thread/read` with `includeTurns:false`,
+`thread.name`, and `thread.sessionId`. Mimori uses a WebSocket over the Unix
+socket, performs initialize/initialized, and requests only concrete candidates
+already established by ingested hooks. It never calls thread/list or reads the
+session index, SQLite files, or rollout files. Returned preview/turn content is
+not copied into the cache, database, diagnostics, or query responses.
+
+Identity evidence at `rust-v0.160.0`:
+
+- [Session::session_id](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/session/session.rs)
+  is shared by the root and descendant threads; thread_id is concrete.
+- [Hook runtime](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/hook_runtime.rs)
+  supplies this session ID and the concrete thread ID as the spawned agent_id.
+- A main-session SessionStart/UserPromptSubmit supplies the root candidate;
+  SubagentStart/Stop supplies the child candidate. Each metadata response must
+  match both the requested concrete `id` and expected root `sessionId`. Missing
+  fields, mismatches, and unsupported schemas are discarded, never inferred from
+  cwd, name, or transcript paths. Older stored observations need a new qualifying
+  hook before they have a candidate.
+
+Refresh is demand-driven by normal mimori queries, shared across editors, at most
+once per 30 seconds, up to 16 retained candidates per batch with a rotating cursor.
+Each batch has a two-second deadline, 256 KiB per frame, 2 MiB total, and a 64-frame
+limit. The cache holds at most 256 entries for five minutes and is scoped to the
+session generation and concrete thread. Expired ended sessions are excluded
+before candidates are selected. No queries means no recurring metadata work.
+Large candidate sets take multiple batches and may exceed the cache horizon;
+these rows keep their ordinary fallback labels.
+
+Renames from other clients are detected by periodic reads, not by assuming
+cross-process delivery of thread/name/updated. A successful null/empty name clears
+the override. Connection/contract failure drops stale cache values and reports
+`title_status: unavailable` without changing collector health. Unsupported or
+inaccessible providers keep their existing labels. This covers a reachable local
+App Server's persisted threads, not arbitrary cloud tasks or standalone embedded
+instances with no exposed compatible endpoint. Metadata updates/expiry participate
+in query revisions, including detail queries; they do not enqueue lifecycle events
+or alter the five-minute ended-session retention deadline.

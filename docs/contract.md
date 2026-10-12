@@ -178,3 +178,20 @@ deduplication records, and capacity limits remain unchanged. Replay on daemon
 startup reconstructs terminal timestamps from existing events; no database
 migration or purge is needed. The policy currently uses the fixed
 `EndedRetention = 5 * time.Minute` default, with no client-side setting.
+
+## Optional title metadata
+
+Events may contain `title` (a string; `""` clears it) independently of `name`.
+Omission means no title observation. An event of kind `title` requires this field
+and targets an existing provider/session/generation only. It cannot carry identity,
+cwd, or task-name changes. Sequenced title observations use the producer sequence;
+unsequenced observations use `observed_at` and event ID as a deterministic tie-break.
+The normal single-authoritative-producer sequence contract still applies.
+
+Queries may return `title`, `title_source`, and a Codex `thread_id` candidate.
+Clients that do not support these fields can ignore them. `title_status` describes
+optional Codex metadata enrichment (`disabled`, `refreshing`, `ready`, or
+`unavailable`) separately from query/collector health. Status changes can accompany
+an unchanged response; retained title changes invalidate the query revision.
+See [provider titles](providers.md#provider-session-titles) for endpoint setup,
+privacy boundaries, compatibility, and bounded refresh behavior.
