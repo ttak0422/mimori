@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,24 +138,20 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	// Model a bounded consumer, not a backend limit. One extra expired session
-	// is enough to overflow its display if the first query leaks old history.
-	const exampleDisplayCapacity = 10
-	const expiredHistoryCount = exampleDisplayCapacity + 1
+	// One already-expired event tests exclusion on the first query after replay.
 	store, err := OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < expiredHistoryCount; i++ {
-		old := event(fmt.Sprintf("old-%d", i), fmt.Sprintf("old-%d", i), "ended", 1)
-		old.Relation = "unknown"
-		old.ObservedAt = time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
-		if err := Enqueue(dir, old); err != nil {
-			t.Fatal(err)
-		}
+	expired := event("expired", "expired", "ended", 1)
+	expired.Relation = "unknown"
+	expired.ObservedAt = time.Now().Add(-EndedRetention).UTC().Format(time.RFC3339Nano)
+	if err := Enqueue(dir, expired); err != nil {
+		t.Fatal(err)
 	}
 	store.Drain(dir, func(message string) { t.Fatal(message) })
 	store.Close()
+	// A second event starts visible, then expires without any new ingest.
 	e := event("end", "r", "ended", 1)
 	e.Relation = "root"
 	e.ObservedAt = time.Now().Add(-EndedRetention + 2*time.Second).UTC().Format(time.RFC3339Nano)
@@ -182,7 +179,7 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal("startup timeout")
 	}
 	before, err := Fetch(dir, Query{Version: 1})
-	if err != nil || len(before.Roots) != 1 || len(before.Unclassified) != 0 {
+	if err != nil || len(before.Roots) != 1 || before.Roots[0].ID != e.Session || len(before.Unclassified) != 0 {
 		t.Fatalf("before: %+v %v", before, err)
 	}
 	q := Query{Version: 1, Revision: before.Revision}
@@ -197,7 +194,7 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !got.Unchanged {
-			if len(got.Roots) != 0 || !got.Complete || got.Revision == before.Revision {
+			if len(got.Roots) != 0 || len(got.Unclassified) != 0 || !got.Complete || got.Revision == before.Revision {
 				t.Fatal(got)
 			}
 			break
@@ -218,9 +215,15 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	// The backlog plus the single time-boundary event must all remain durable.
-	if want := expiredHistoryCount + 1; len(store.events) != want {
-		t.Fatalf("durable event count = %d, want %d", len(store.events), want)
+	// Neither kind of query exclusion may remove its underlying event.
+	wantEvents := []Event{expired, e}
+	if len(store.events) != len(wantEvents) {
+		t.Fatalf("durable event count = %d, want %d", len(store.events), len(wantEvents))
+	}
+	for _, want := range wantEvents {
+		if !slices.ContainsFunc(store.events, func(got Event) bool { return got.ID == want.ID }) {
+			t.Fatalf("durable event %q removed", want.ID)
+		}
 	}
 	replayed := (Snapshot{"restart", Reduce(store.events)}).Query(Query{Version: 1})
 	if len(replayed.Roots) != 0 || len(replayed.Unclassified) != 0 {
