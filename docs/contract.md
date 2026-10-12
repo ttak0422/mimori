@@ -101,8 +101,8 @@ process scheduling/I/O stalls; choose a nonblocking/async mode if supported.
 Mimori prints no hook decision or success payload to stdout.
 
 At 100,000 unique events the collector refuses new events, preserving queued data.
-This PoC keeps deduplication tombstones and ended sessions until an operator stops
-the daemon and archives the entire state directory. Automatic compaction/retention
+This PoC keeps durable deduplication tombstones and ended-session events until an operator stops
+the daemon and archives the entire state directory. Automatic storage compaction/retention
 is deliberately deferred: deleting a tombstone without a replay horizon can
 resurrect old activity. Crash-left `.pending-*` files are not events and may be
 removed only while all ingest processes are stopped. They count toward capacity.
@@ -150,3 +150,31 @@ agent rows. It records historical evidence, not current transport/agent health;
 a later successful collection does not clear it. Restart clears this in-memory
 record. Raw event payloads are never included. This is bounded inspection, not a
 persistent diagnostic history.
+
+## Ended-session query retention
+
+Normal list, provider, and detail queries retain explicitly ended sessions for
+five minutes from `ended_at` (RFC3339, the earliest terminal observation in the
+current generation). Identity updates and duplicate/delayed events do not extend
+this deadline. A newer generation starts with no terminal timestamp. Existing
+absorbing-terminal behavior within a generation is unchanged.
+
+Filtering happens before serialization and its response size limit, so expired
+history cannot occupy a client row budget or contribute to a client's `more`
+count. Query validators include the retained membership: crossing a deadline
+returns a complete updated response even with no newly ingested events; subsequent
+polls can return `unchanged` again. An expired detail returns `not_found`.
+The existing Neovim client polls every two seconds while subscribed.
+
+Idle and unknown sessions never expire merely because they are old. An ancestor
+of any retained child is kept too, respecting parent generation and cycles;
+this includes idle/unknown children and recently ended children. Running or
+waiting descendant aggregation continues unchanged. A fully ended tree disappears
+when the last descendant's retention expires. Invalid/missing terminal timestamps
+are conservatively retained.
+
+This is a query-view policy, not storage compaction. All durable events,
+deduplication records, and capacity limits remain unchanged. Replay on daemon
+startup reconstructs terminal timestamps from existing events; no database
+migration or purge is needed. The policy currently uses the fixed
+`EndedRetention = 5 * time.Minute` default, with no client-side setting.

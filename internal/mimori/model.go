@@ -84,6 +84,7 @@ type Session struct {
 	UnresolvedExact    bool     `json:"unresolved_count_exact"`
 	Requests           []string `json:"request_ids"`
 	LastEventAt        string   `json:"last_event_at"`
+	EndedAt            string   `json:"ended_at,omitempty"`
 	Liveness           string   `json:"liveness"`
 	Ordering           string   `json:"ordering"`
 	Classification     string   `json:"classification"`
@@ -131,6 +132,10 @@ func Reduce(events []Event) []Session {
 		if e.Name != "" && (s.Name == "" || e.Seq > s.nameSeq) {
 			s.Name = e.Name
 			s.nameSeq = e.Seq
+		}
+		// Duplicate or delayed terminal observations must not extend retention.
+		if e.Kind == "ended" && (s.EndedAt == "" || after(s.EndedAt, e.ObservedAt)) {
+			s.EndedAt = e.ObservedAt
 		}
 		if s.State == "ended" {
 			continue
