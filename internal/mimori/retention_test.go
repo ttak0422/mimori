@@ -137,13 +137,15 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	// Reproduce an old persisted backlog before the first query: 130 ended,
-	// unclassified sessions would occupy all ten UI rows and produce +120 more.
+	// Model a bounded consumer, not a backend limit. One extra expired session
+	// is enough to overflow its display if the first query leaks old history.
+	const exampleDisplayCapacity = 10
+	const expiredHistoryCount = exampleDisplayCapacity + 1
 	store, err := OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 130; i++ {
+	for i := 0; i < expiredHistoryCount; i++ {
 		old := event(fmt.Sprintf("old-%d", i), fmt.Sprintf("old-%d", i), "ended", 1)
 		old.Relation = "unknown"
 		old.ObservedAt = time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
@@ -216,8 +218,9 @@ func TestSocketRetentionWithoutNewEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if len(store.events) != 131 {
-		t.Fatal("durable history removed")
+	// The backlog plus the single time-boundary event must all remain durable.
+	if want := expiredHistoryCount + 1; len(store.events) != want {
+		t.Fatalf("durable event count = %d, want %d", len(store.events), want)
 	}
 	replayed := (Snapshot{"restart", Reduce(store.events)}).Query(Query{Version: 1})
 	if len(replayed.Roots) != 0 || len(replayed.Unclassified) != 0 {
