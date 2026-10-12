@@ -13,7 +13,7 @@
             pname = "mimori";
             version = "0.1.0";
             src = self;
-            vendorHash = "sha256-P7Viwr2hrzrVCac04v9NNePGgLsXQfiEoMe3nIVjkio=";
+            vendorHash = "sha256-UIvLg5QYhV8YzjCT5PfwqOjbVd4by2KVIE+kftSIBQs=";
             subPackages = [ "cmd/mimori" ];
             doCheck = true;
             checkPhase = "go test ./...";

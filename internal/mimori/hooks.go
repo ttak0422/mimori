@@ -11,15 +11,16 @@ import (
 // transcript paths and assistant messages are never copied into the spool.
 func NormalizeHook(provider string, b []byte, generation uint64) (Event, error) {
 	var h struct {
-		Session      string `json:"session_id"`
-		Event        string `json:"hook_event_name"`
-		CWD          string `json:"cwd"`
-		Agent        string `json:"agent_id"`
-		Tool         string `json:"tool_use_id"`
-		Request      string `json:"request_id"`
-		Elicitation  string `json:"elicitation_id"`
-		MCPServer    string `json:"mcp_server_name"`
-		Notification string `json:"notification_type"`
+		SessionTitle *string `json:"session_title"`
+		Session      string  `json:"session_id"`
+		Event        string  `json:"hook_event_name"`
+		CWD          string  `json:"cwd"`
+		Agent        string  `json:"agent_id"`
+		Tool         string  `json:"tool_use_id"`
+		Request      string  `json:"request_id"`
+		Elicitation  string  `json:"elicitation_id"`
+		MCPServer    string  `json:"mcp_server_name"`
+		Notification string  `json:"notification_type"`
 	}
 	if provider != "claude" && provider != "codex" {
 		return Event{}, errors.New("hook provider must be claude or codex")
@@ -98,6 +99,24 @@ func NormalizeHook(provider string, b []byte, generation uint64) (Event, error) 
 		e.ParentGeneration = generation
 		e.Relation = "child"
 		e.Session = fmt.Sprintf("agent:%d:%s:%s", len(h.Session), h.Session, h.Agent)
+	}
+	// Only documented parent-session hook fields carry the custom title. Missing
+	// titles on these events clear a prior title; unrelated hooks never clear it.
+	if provider == "claude" && h.Agent == "" && (h.Event == "SessionStart" || h.Event == "UserPromptSubmit") {
+		title := ""
+		if h.SessionTitle != nil {
+			title = *h.SessionTitle
+		}
+		e.Title = &title
+	}
+	// Codex 0.160: session_id is shared by the tree; agent_id is the concrete
+	// spawned thread ID. Never alias a child by cwd/name or update it as a root.
+	if provider == "codex" {
+		if h.Event == "SubagentStart" || h.Event == "SubagentStop" {
+			e.ThreadID = h.Agent
+		} else if h.Agent == "" && (h.Event == "SessionStart" || h.Event == "UserPromptSubmit") {
+			e.ThreadID = h.Session
+		}
 	}
 	return e, e.Validate()
 }

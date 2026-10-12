@@ -34,6 +34,7 @@ type CollectorDiagnostic struct {
 
 type Response struct {
 	LatestCollectorDiagnostic *CollectorDiagnostic `json:"latest_collector_diagnostic,omitempty"`
+	TitleStatus               string               `json:"title_status,omitempty"`
 	Version                   int                  `json:"version"`
 	Revision                  string               `json:"revision"`
 	Unchanged                 bool                 `json:"unchanged,omitempty"`
@@ -192,6 +193,10 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 		return err
 	}
 	defer store.Close()
+	titles := newTitleCache(os.Getenv("MIMORI_CODEX_SOCKET"))
+	// Cancel metadata I/O before waiting for its bounded workers at shutdown.
+	ctx, stopTitles := context.WithCancel(ctx)
+	defer func() { stopTitles(); titles.close() }()
 	var mu sync.RWMutex
 	var diagnostic *CollectorDiagnostic
 	report := func(message string) {
@@ -293,7 +298,9 @@ func ServeReady(ctx context.Context, dir string, diagnose func(string), ready fu
 			if q.Health && q.Version == 1 {
 				r = Response{Version: 1, Revision: scopedRevision(snap.Revision, q), Complete: true}
 			} else {
-				r = snap.Query(q)
+				view, titleStatus := titles.view(ctx, snap, time.Now())
+				r = view.Query(q)
+				r.TitleStatus = titleStatus
 			}
 			r.LatestCollectorDiagnostic = diagnostic
 			mu.RUnlock()

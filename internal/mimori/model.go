@@ -12,27 +12,29 @@ import (
 // Event is the privacy-filtered v1 ingestion contract. Sequence is assigned by
 // one authoritative producer per session generation, never by wall-clock time.
 type Event struct {
-	Version          int    `json:"version"`
-	ID               string `json:"event_id"`
-	Provider         string `json:"provider"`
-	Session          string `json:"session_id"`
-	Generation       uint64 `json:"generation"`
-	Seq              uint64 `json:"seq,omitempty"`
-	Kind             string `json:"kind"`
-	Relation         string `json:"relation,omitempty"`
-	Parent           string `json:"parent_id,omitempty"`
-	ParentGeneration uint64 `json:"parent_generation,omitempty"`
-	Request          string `json:"request_id,omitempty"`
-	CWD              string `json:"cwd,omitempty"`
-	Name             string `json:"name,omitempty"`
-	ObservedAt       string `json:"observed_at"`
+	Version          int     `json:"version"`
+	ID               string  `json:"event_id"`
+	Provider         string  `json:"provider"`
+	Session          string  `json:"session_id"`
+	Generation       uint64  `json:"generation"`
+	Seq              uint64  `json:"seq,omitempty"`
+	Kind             string  `json:"kind"`
+	Relation         string  `json:"relation,omitempty"`
+	Parent           string  `json:"parent_id,omitempty"`
+	ParentGeneration uint64  `json:"parent_generation,omitempty"`
+	Request          string  `json:"request_id,omitempty"`
+	CWD              string  `json:"cwd,omitempty"`
+	Name             string  `json:"name,omitempty"`
+	Title            *string `json:"title,omitempty"`
+	ThreadID         string  `json:"thread_id,omitempty"`
+	ObservedAt       string  `json:"observed_at"`
 }
 
 func (e Event) Validate() error {
 	if e.Version != 1 || e.ID == "" || e.Provider == "" || e.Session == "" || e.Generation == 0 {
 		return errors.New("version=1, event_id, provider, session_id and positive generation required")
 	}
-	for _, v := range []string{e.ID, e.Provider, e.Session, e.Parent, e.Request, e.Name, e.CWD} {
+	for _, v := range []string{e.ID, e.Provider, e.Session, e.Parent, e.Request, e.Name, e.CWD, e.ThreadID} {
 		if strings.ContainsRune(v, 0) {
 			return errors.New("NUL is not allowed in event fields")
 		}
@@ -40,8 +42,14 @@ func (e Event) Validate() error {
 			return errors.New("field exceeds 4096 bytes")
 		}
 	}
+	if e.Title != nil && (len(*e.Title) > 4096 || strings.ContainsRune(*e.Title, 0)) {
+		return errors.New("invalid title")
+	}
+	if e.Kind == "title" && (e.Title == nil || e.Relation != "" || e.Parent != "" || e.CWD != "" || e.Name != "" || e.ThreadID != "") {
+		return errors.New("title event must contain only title metadata")
+	}
 	switch e.Kind {
-	case "identity", "turn_start", "running", "idle", "ended", "request_open", "request_resolved", "attention_unknown", "attention_clear":
+	case "title", "identity", "turn_start", "running", "idle", "ended", "request_open", "request_resolved", "attention_unknown", "attention_clear":
 	default:
 		return errors.New("unsupported event kind")
 	}
@@ -76,6 +84,9 @@ type Session struct {
 	Root               string   `json:"root_id,omitempty"`
 	CWD                string   `json:"cwd,omitempty"`
 	Name               string   `json:"name,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	TitleSource        string   `json:"title_source,omitempty"`
+	ThreadID           string   `json:"thread_id,omitempty"`
 	State              string   `json:"state"`
 	Aggregate          string   `json:"aggregate_state"`
 	RunningDescendants int      `json:"running_descendants"`
@@ -93,6 +104,9 @@ type Session struct {
 	attentionSeq       uint64
 	cwdSeq             uint64
 	nameSeq            uint64
+	titleSeq           uint64
+	titleAt            string
+	titleID            string
 	resolved           map[string]bool
 	requests           map[string]bool
 }
@@ -106,6 +120,10 @@ func Reduce(events []Event) []Session {
 	for _, e := range events {
 		k := key(e.Provider, e.Session)
 		s := m[k]
+		// Metadata cannot create a session, advance its generation, or resurrect it.
+		if e.Kind == "title" && (s == nil || s.Generation != e.Generation) {
+			continue
+		}
 		if s != nil && s.Generation > e.Generation {
 			continue
 		}
@@ -113,11 +131,25 @@ func Reduce(events []Event) []Session {
 			s = &Session{Provider: e.Provider, ID: e.Session, Generation: e.Generation, Relation: "unknown", State: "unknown", Liveness: "unknown", Ordering: "sequenced", requests: map[string]bool{}, resolved: map[string]bool{}}
 			m[k] = s
 		}
-		if e.Seq == 0 {
+		if e.Seq == 0 && e.Kind != "title" {
 			s.Ordering = "best_effort"
 		}
-		if s.LastEventAt == "" || after(e.ObservedAt, s.LastEventAt) {
+		if e.Kind != "title" && (s.LastEventAt == "" || after(e.ObservedAt, s.LastEventAt)) {
 			s.LastEventAt = e.ObservedAt
+		}
+		if e.ThreadID != "" && s.ThreadID == "" {
+			s.ThreadID = e.ThreadID
+		}
+		if e.Title != nil && newerTitle(s, e) {
+			s.Title = strings.TrimSpace(*e.Title)
+			s.TitleSource = ""
+			if s.Title != "" {
+				s.TitleSource = "provider"
+			}
+			s.titleSeq, s.titleAt, s.titleID = e.Seq, e.ObservedAt, e.ID
+		}
+		if e.Kind == "title" {
+			continue
 		}
 		if e.Relation != "" && (e.Seq == 0 || e.Seq > s.identitySeq) {
 			s.Relation = e.Relation
@@ -263,3 +295,18 @@ func DecodeEvent(b []byte) (Event, error) {
 	return e, err
 }
 func revision(epoch string, n int) string { return fmt.Sprintf("%s:%d", epoch, n) }
+
+// Sequenced producers retain authority. Unsequenced hooks use their collector
+// observation time, with an event-ID tie-break; providers supply no rename order.
+func newerTitle(s *Session, e Event) bool {
+	if s.titleAt == "" {
+		return true
+	}
+	if e.Seq != 0 || s.titleSeq != 0 {
+		return e.Seq > s.titleSeq
+	}
+	if after(e.ObservedAt, s.titleAt) {
+		return true
+	}
+	return !after(s.titleAt, e.ObservedAt) && e.ID > s.titleID
+}
